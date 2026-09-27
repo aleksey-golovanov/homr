@@ -56,10 +56,11 @@ class TestVocabulary(unittest.TestCase):
             EncodedSymbol("clef_G2", position="upper"),
             EncodedSymbol("clef_F4", position="lower"),
             EncodedSymbol("keySignature_0"),
-            EncodedSymbol("timeSignature_/4"),
+            EncodedSymbol("timeSignature/4"),
+            EncodedSymbol("timeSignature/4"),
             EncodedSymbol("note_4"),
             EncodedSymbol("keySignature_0"),
-            EncodedSymbol("timeSignature_/4"),
+            EncodedSymbol("timeSignature/4"),
             EncodedSymbol("clef_G2", position="upper"),
             EncodedSymbol("clef_G2", position="lower"),
         ]
@@ -70,11 +71,22 @@ class TestVocabulary(unittest.TestCase):
                 EncodedSymbol("clef_G2", position="upper"),
                 EncodedSymbol("clef_F4", position="lower"),
                 EncodedSymbol("keySignature_0"),
-                EncodedSymbol("timeSignature_/4"),
+                EncodedSymbol("timeSignature/4"),
                 EncodedSymbol("note_4"),
+                EncodedSymbol("timeSignature/4"),
                 EncodedSymbol("clef_G2", position="lower"),
             ],
         )
+
+    def test_preserve_time_signature_after_empty_barline(self) -> None:
+        for boundary in ("barline", "doublebarline", "repeatStart", "repeatEnd", "repeatEndStart"):
+            with self.subTest(boundary=boundary):
+                symbols = [
+                    EncodedSymbol("timeSignature/4"),
+                    EncodedSymbol(boundary),
+                    EncodedSymbol("timeSignature/4"),
+                ]
+                self.assertEqual(remove_duplicated_symbols(symbols), symbols)
 
     def test_remove_duplicates_in_chord(self) -> None:
         tokens_str = """clef_G2 _ _ _ _ upper&clef_F4 _ _ _ _ lower

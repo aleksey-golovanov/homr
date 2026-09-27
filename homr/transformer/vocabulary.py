@@ -490,6 +490,13 @@ def _remove_redudant_clefs_keys_and_time_signatures(
                     result.append(symbol)
             else:
                 result.append(symbol)
+                if (
+                    symbol.rhythm.startswith(("note", "rest", "repeat"))
+                    or "barline" in symbol.rhythm
+                ):
+                    # Equal denominators at different musical positions can
+                    # have different numerators. Only collapse local duplicates.
+                    time = ""
         result_chords.append(result)
     return result_chords
 

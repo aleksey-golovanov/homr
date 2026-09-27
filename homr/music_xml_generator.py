@@ -5,8 +5,7 @@ import xml.etree.ElementTree as ET
 from collections import defaultdict
 from dataclasses import dataclass
 from fractions import Fraction
-
-import numpy as np
+from statistics import median
 
 from homr import constants
 from homr.simple_logging import eprint
@@ -153,8 +152,9 @@ def build_measures(
 
     measure_number = 1
     groups = add_tuplet_start_stop(group_into_chords(voice))
-    division, nominator = find_division_and_time_signature_nominator(groups)
-    state = ConversionState(division, nominator)
+    division = find_division(groups)
+    signature_lengths = find_time_signature_lengths(groups)
+    state = ConversionState(division, signature_lengths[0])
     measures: list[ET.Element] = []
     current_measure = ET.Element("measure", number=str(measure_number))
     first_attributes = build_or_get_attributes(current_measure, None)
@@ -199,6 +199,7 @@ def build_measures(
             build_key(symbol, attributes)
         elif rhythm.startswith("timeSignature"):
             attributes = build_or_get_attributes(current_measure, last_attributes)
+            state.nominator = signature_lengths[group_no]
             build_time_signature(symbol, attributes, state)
         elif "barline" in rhythm:
             if rhythm != "barline":
@@ -244,9 +245,15 @@ def build_measures(
 
     if len(list(current_measure)) > 0:
         close_current_measure()
-    if first_attributes.find("time") is None:
+    opening_attributes = []
+    for element in measures[0]:
+        if element.tag == "note":
+            break
+        if element.tag == "attributes":
+            opening_attributes.append(element)
+    if not any(attributes.find("time") is not None for attributes in opening_attributes):
         time_el = ET.SubElement(first_attributes, "time")
-        beats = max(int(state.nominator * 4), 1)
+        beats = max(int(signature_lengths[0] * 4), 1)
         ET.SubElement(time_el, "beats").text = str(beats)
         ET.SubElement(time_el, "beat-type").text = "4"
     return measures
@@ -827,33 +834,49 @@ def find_common_division(durations: list[Fraction]) -> int:
     return common
 
 
-def find_division_and_time_signature_nominator(voice: list[SymbolChord]) -> tuple[int, Fraction]:
+def find_division(voice: list[SymbolChord]) -> int:
+    """Use one duration unit for every note in the part, across meter changes."""
     durations = [Fraction(1, 4)]
-    duration_in_measure = Fraction(0)
-    measure_duration = []
     for chord in voice:
-        if chord.is_barline() and duration_in_measure > Fraction(0):
-            measure_duration.append(duration_in_measure)
+        for symbol in chord.symbols:
+            if symbol.rhythm.startswith(("note", "rest")):
+                durations.append(symbol.get_duration().fraction)
+    return find_common_division(durations)
+
+
+def find_time_signature_lengths(voice: list[SymbolChord]) -> dict[int, Fraction]:
+    """Estimate a measure length between each pair of recognized signature markers.
+
+    Markers retain only the denominator, so equal tokens may still mark a change.
+    Keep the implicit opening section separate from later explicit signatures.
+    """
+    sections: dict[int, list[Fraction]] = {0: []}
+    section_start = 0
+    duration_in_measure = Fraction(0)
+    for index, chord in enumerate(voice):
+        is_signature = chord.symbols[0].rhythm.startswith("timeSignature")
+        if (chord.is_barline() or is_signature) and duration_in_measure > 0:
+            sections[section_start].append(duration_in_measure)
             duration_in_measure = Fraction(0)
-        else:
-            for symbol in chord.symbols:
-                if symbol.rhythm.startswith(("note", "rest")):
-                    frac = symbol.get_duration().fraction
-                    if frac > Fraction(0):
-                        durations.append(frac)
-            duration = chord.get_duration()
-            if duration > Fraction(0):
-                duration_in_measure += duration
+        if is_signature:
+            section_start = index
+            sections.setdefault(section_start, [])
+        elif not chord.is_barline():
+            duration_in_measure += chord.get_duration()
 
-    if duration_in_measure > Fraction(0):
-        measure_duration.append(duration_in_measure)
+    if duration_in_measure > 0:
+        sections[section_start].append(duration_in_measure)
 
-    if len(measure_duration) == 0:
-        return find_common_division(durations), Fraction(1)
-
-    nominator: Fraction = np.median(measure_duration)  # type: ignore
-
-    return find_common_division(durations), nominator
+    # Keep the existing estimator within a section, without pooling durations
+    # across recognized signature changes.
+    lengths = {index: median(values) for index, values in sections.items() if values}
+    following = next(reversed(lengths.values()), Fraction(1))
+    for index in reversed(sections):
+        # A marker before another marker has no notes of its own. Use the next
+        # section; a trailing marker falls back to the last observed length.
+        following = lengths.get(index, following)
+        lengths[index] = following
+    return lengths
 
 
 def group_into_chords(voice: list[EncodedSymbol]) -> list[SymbolChord]:
